@@ -52,8 +52,14 @@ function handle_id($ch)
  * (see file header - freshness matters more than preservation
  * here). Returns the LGs that came back 'down' or 'error', for
  * the caller's automatic retry pass.
+ *
+ * When $checkLegacy is true, each LG gets TWO concurrent handles
+ * (main site + old.<domain> legacy check) within the same batch,
+ * so total wall-clock time stays roughly the same as a main-only
+ * run - it's the per-chunk concurrency that doubles, not the
+ * number of chunks.
  */
-function probe_chunk(array $targets, $timeout, $connectTimeout, array &$cache)
+function probe_chunk(array $targets, $timeout, $connectTimeout, array &$cache, $checkLegacy)
 {
     if (empty($targets)) {
         return [];
@@ -61,25 +67,53 @@ function probe_chunk(array $targets, $timeout, $connectTimeout, array &$cache)
 
     $mh = curl_multi_init();
     $handleMap = [];
+    $pending = []; // lgid => ['lg' => ..., 'main' => entry|null, 'legacy' => array|null]
 
     foreach ($targets as $lg) {
-        $url = normalize_domain($lg['domain'] ?? '');
-        $ch = curl_init();
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $url,
+        $lgid = (string) $lg['lgid'];
+        $mainUrl = normalize_domain($lg['domain'] ?? '');
+        $pending[$lgid] = ['lg' => $lg, 'main' => null, 'legacy' => $checkLegacy ? null : []];
+
+        $chMain = curl_init();
+        curl_setopt_array($chMain, [
+            CURLOPT_URL => $mainUrl,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HEADER => true,       // capture response headers (for Server:)
+            CURLOPT_HEADER => true, // capture response headers (for Server:)
             CURLOPT_NOBODY => false,
             CURLOPT_CONNECTTIMEOUT => $connectTimeout,
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 5,
-            CURLOPT_ENCODING => '',       // accept compressed responses
+            CURLOPT_ENCODING => '',
             CURLOPT_USERAGENT => 'PLGSP-LG-Website-Monitor/1.0 (+Gandaki Province OCMCM)',
         ]);
-        curl_multi_add_handle($mh, $ch);
-        $handleMap[handle_id($ch)] = ['ch' => $ch, 'lg' => $lg];
+        curl_multi_add_handle($mh, $chMain);
+        $handleMap[handle_id($chMain)] = ['lgid' => $lgid, 'kind' => 'main'];
+
+        if ($checkLegacy) {
+            $legacyUrl = legacy_domain_url($mainUrl);
+            if ($legacyUrl === null) {
+                // Couldn't derive an old.<host> URL (e.g. malformed
+                // domain) - nothing to probe, mark as not-checked.
+                $pending[$lgid]['legacy'] = ['legacy_exists' => null, 'legacy_http_code' => null, 'legacy_url' => null];
+            } else {
+                $chLegacy = curl_init();
+                curl_setopt_array($chLegacy, [
+                    CURLOPT_URL => $legacyUrl,
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_NOBODY => true, // just an existence check, don't need the body
+                    CURLOPT_CONNECTTIMEOUT => $connectTimeout,
+                    CURLOPT_TIMEOUT => $timeout,
+                    CURLOPT_SSL_VERIFYPEER => false,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_MAXREDIRS => 5,
+                    CURLOPT_USERAGENT => 'PLGSP-LG-Website-Monitor/1.0 (+Gandaki Province OCMCM)',
+                ]);
+                curl_multi_add_handle($mh, $chLegacy);
+                $handleMap[handle_id($chLegacy)] = ['lgid' => $lgid, 'kind' => 'legacy'];
+            }
+        }
     }
 
     $needsRetry = [];
@@ -91,26 +125,47 @@ function probe_chunk(array $targets, $timeout, $connectTimeout, array &$cache)
         while ($info = curl_multi_info_read($mh)) {
             $ch = $info['handle'];
             $hid = handle_id($ch);
-            $lg = $handleMap[$hid]['lg'];
+            $meta = $handleMap[$hid];
+            $lgid = $meta['lgid'];
 
-            $raw = curl_multi_getcontent($ch);
-            $err = curl_error($ch);
-            $curlInfo = curl_getinfo($ch);
-            $headerSize = $curlInfo['header_size'] ?? 0;
-            $headersRaw = $raw !== false ? substr($raw, 0, $headerSize) : '';
-
-            $entry = build_website_status_record($lg, $curlInfo, $err, $headersRaw);
-            $cache['by_lg'][$entry['lgid']] = $entry; // always overwrite - see file header
-
-            if ($entry['status'] !== 'ok') {
-                $needsRetry[] = $lg;
+            if ($meta['kind'] === 'main') {
+                $raw = curl_multi_getcontent($ch);
+                $err = curl_error($ch);
+                $curlInfo = curl_getinfo($ch);
+                $headerSize = $curlInfo['header_size'] ?? 0;
+                $headersRaw = $raw !== false ? substr($raw, 0, $headerSize) : '';
+                $pending[$lgid]['main'] = build_website_status_record($pending[$lgid]['lg'], $curlInfo, $err, $headersRaw);
+            } else {
+                $err = curl_error($ch);
+                $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $exists = $err === '' && $httpCode >= 200 && $httpCode < 400;
+                $pending[$lgid]['legacy'] = [
+                    'legacy_exists'    => $exists,
+                    'legacy_http_code' => $httpCode,
+                    'legacy_url'       => curl_getinfo($ch, CURLINFO_EFFECTIVE_URL),
+                ];
             }
-
-            sse_send('lg_result', $entry);
 
             curl_multi_remove_handle($mh, $ch);
             curl_close($ch);
             unset($handleMap[$hid]);
+
+            // Finalize + emit once both halves for this LG are in
+            $p = $pending[$lgid];
+            if ($p['main'] !== null && $p['legacy'] !== null) {
+                $entry = $p['main'];
+                if (!empty($p['legacy'])) {
+                    $entry = array_merge($entry, $p['legacy']);
+                }
+                $cache['by_lg'][$lgid] = $entry; // always overwrite - see file header
+
+                if ($entry['status'] !== 'ok') {
+                    $needsRetry[] = $p['lg'];
+                }
+
+                sse_send('lg_result', $entry);
+                unset($pending[$lgid]);
+            }
         }
 
         if ($active) {
@@ -123,7 +178,7 @@ function probe_chunk(array $targets, $timeout, $connectTimeout, array &$cache)
     return $needsRetry;
 }
 
-function probe_all_chunked(array $targets, $timeout, $connectTimeout, array &$cache, $chunkSize = 40)
+function probe_all_chunked(array $targets, $timeout, $connectTimeout, array &$cache, $checkLegacy, $chunkSize = 40)
 {
     $needsRetry = [];
     $chunks = array_chunk($targets, $chunkSize);
@@ -133,7 +188,7 @@ function probe_all_chunked(array $targets, $timeout, $connectTimeout, array &$ca
         if ($chunkCount > 1) {
             sse_send('chunk_progress', ['chunk' => $i + 1, 'of' => $chunkCount]);
         }
-        $needsRetry = array_merge($needsRetry, probe_chunk($chunk, $timeout, $connectTimeout, $cache));
+        $needsRetry = array_merge($needsRetry, probe_chunk($chunk, $timeout, $connectTimeout, $cache, $checkLegacy));
 
         $cache['generated_at'] = date('Y-m-d H:i:s');
         save_cache($cache, WEBSITE_STATUS_CACHE_FILE);
@@ -171,14 +226,16 @@ if ($mode === 'retry_failed') {
 
 sse_send('meta', ['total' => count($targets), 'mode' => $mode]);
 
+$checkLegacy = ($_GET['check_legacy'] ?? '1') !== '0';
+
 // Pass 1 - a normal working page usually loads well within this
-$stillFailing = probe_all_chunked($targets, 30, 15, $cache, 40);
+$stillFailing = probe_all_chunked($targets, 30, 15, $cache, $checkLegacy, 40);
 
 // Pass 2 - automatic retry for anything down/errored, longer window
 // in case it was just a slow response, not truly down
 if (!empty($stillFailing)) {
     sse_send('retry_pass', ['count' => count($stillFailing)]);
-    probe_all_chunked($stillFailing, 60, 25, $cache, 40);
+    probe_all_chunked($stillFailing, 60, 25, $cache, $checkLegacy, 40);
 }
 
 $cache['generated_at'] = date('Y-m-d H:i:s');
@@ -189,6 +246,8 @@ $downCount = 0;
 $errorCount = 0;
 $totalResponseMs = 0;
 $responseCount = 0;
+$migratedCount = 0;
+$legacyStillLiveCount = 0;
 foreach ($cache['by_lg'] as $entry) {
     if (($entry['status'] ?? '') === 'ok') {
         $okCount++;
@@ -201,13 +260,21 @@ foreach ($cache['by_lg'] as $entry) {
         $totalResponseMs += $entry['response_ms'];
         $responseCount++;
     }
+    if (!empty($entry['migrated_to_new'])) {
+        $migratedCount++;
+    }
+    if (!empty($entry['legacy_exists'])) {
+        $legacyStillLiveCount++;
+    }
 }
 
 sse_send('done', [
-    'ok'            => $okCount,
-    'failed'        => $downCount + $errorCount,
-    'down'          => $downCount,
-    'error'         => $errorCount,
-    'avg_response_ms' => $responseCount ? (int) round($totalResponseMs / $responseCount) : null,
-    'generated_at'  => $cache['generated_at'],
+    'ok'                     => $okCount,
+    'failed'                 => $downCount + $errorCount,
+    'down'                   => $downCount,
+    'error'                  => $errorCount,
+    'avg_response_ms'        => $responseCount ? (int) round($totalResponseMs / $responseCount) : null,
+    'migrated_count'         => $migratedCount,
+    'legacy_still_live_count' => $legacyStillLiveCount,
+    'generated_at'           => $cache['generated_at'],
 ]);

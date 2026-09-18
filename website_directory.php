@@ -21,6 +21,8 @@ $errorCount = 0;
 $totalResponseMs = 0;
 $responseCount = 0;
 $ipSet = [];
+$migratedCount = 0;
+$legacyStillLiveCount = 0;
 foreach ($byLg as $entry) {
     $status = $entry['status'] ?? 'error';
     if ($status === 'ok') {
@@ -36,6 +38,12 @@ foreach ($byLg as $entry) {
     }
     if (!empty($entry['server_ip'])) {
         $ipSet[$entry['server_ip']] = true;
+    }
+    if (!empty($entry['migrated_to_new'])) {
+        $migratedCount++;
+    }
+    if (!empty($entry['legacy_exists'])) {
+        $legacyStillLiveCount++;
     }
 }
 $avgResponseMs = $responseCount ? (int) round($totalResponseMs / $responseCount) : null;
@@ -101,6 +109,18 @@ $modulesJson = json_encode(
     <div class="stat-card error"><div class="sc-value"><?= $errorCount ?></div><div class="sc-label">Unreachable</div></div>
     <div class="stat-card"><div class="sc-value"><?= $avgResponseMs !== null ? $avgResponseMs . 'ms' : '—' ?></div><div class="sc-label">Avg Response</div></div>
     <div class="stat-card"><div class="sc-value"><?= $uniqueIpCount ?></div><div class="sc-label">Unique Server IPs</div></div>
+    <div class="stat-card"><div class="sc-value"><?= $migratedCount ?></div><div class="sc-label">Migrated to Django</div></div>
+    <div class="stat-card"><div class="sc-value"><?= $legacyStillLiveCount ?></div><div class="sc-label">Old Site Still Live</div></div>
+  </div>
+
+  <div class="console-warn" style="background: var(--navy-light); border-color: var(--navy-border); color: var(--navy);">
+    <strong>Infrastructure note:</strong> most LG sites run on two older Drupal servers
+    (<span class="mono" style="font-family:ui-monospace,monospace;">103.69.124.140</span> and
+    <span class="mono" style="font-family:ui-monospace,monospace;">103.69.127.8</span>). The ministry is gradually
+    moving sites to a new Django server (<span class="mono" style="font-family:ui-monospace,monospace;">103.69.127.59</span>).
+    When a site migrates, its old Drupal copy is <em>not</em> deleted — it stays reachable at
+    <span class="mono" style="font-family:ui-monospace,monospace;">old.&lt;domain&gt;</span>. The Platform column
+    below shows which server each site currently resolves to, and whether a legacy copy is still live.
   </div>
 
   <div class="data-table-wrap" style="margin-bottom: 1.2rem;">
@@ -111,7 +131,7 @@ $modulesJson = json_encode(
     <table class="data-table">
       <thead>
         <tr>
-          <th>Server IP</th>
+          <th>Server</th>
           <th>Total Sites</th>
           <th>Up</th>
           <th>Down / Unreachable</th>
@@ -177,6 +197,9 @@ $modulesJson = json_encode(
           <th>Status</th>
           <th>Response</th>
           <th>Server IP</th>
+          <th>Platform</th>
+          <th>Legacy Copy</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="tableBody"></tbody>
@@ -301,6 +324,50 @@ function respBadge(ms) {
     return `<span class="resp-badge ${cls}">${ms}ms</span>`;
 }
 
+function platformBadge(r) {
+    if (!r.platform) {
+        return `<span class="resp-badge none">Unknown IP</span>`;
+    }
+    const cls = r.migrated_to_new ? 'ok' : 'down';
+    const label = r.migrated_to_new ? `${r.platform} (New)` : `${r.platform} (Old)`;
+    return `<span class="status-badge ${cls}">${escapeHtml(label)}</span>`;
+}
+
+function legacyCell(r) {
+    if (r.legacy_exists === null || r.legacy_exists === undefined) {
+        return `<span class="resp-badge none">Not checked</span>`;
+    }
+    if (r.legacy_exists === true) {
+        return `<a class="site-link" href="${escapeHtml(r.legacy_url || '')}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Still live &rarr;</a>`;
+    }
+    return `<span class="resp-badge none">None</span>`;
+}
+
+function checkNowButton(lgid) {
+    return `<button class="btn-reset check-now-btn" data-lgid="${escapeHtml(lgid)}" style="font-size:10.5px; padding:4px 9px;" onclick="event.stopPropagation(); checkSiteNow('${escapeHtml(lgid)}', this)">Check now</button>`;
+}
+
+async function checkSiteNow(lgid, buttonEl) {
+    const originalLabel = buttonEl.textContent;
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Checking…';
+    try {
+        const res = await fetch(`check_single_site.php?lgid=${encodeURIComponent(lgid)}&check_legacy=1`);
+        const updated = await res.json();
+        if (!res.ok || updated.error) {
+            throw new Error(updated.error || 'Check failed');
+        }
+        const idx = ALL_RECORDS.findIndex(r => r.lgid === lgid);
+        if (idx !== -1) ALL_RECORDS[idx] = updated;
+        buildServerSummary();
+        render();
+    } catch (err) {
+        buttonEl.textContent = 'Failed — retry';
+        buttonEl.disabled = false;
+        setTimeout(() => { buttonEl.textContent = originalLabel; }, 2500);
+    }
+}
+
 function detailRow(r) {
     const items = [
         ['HTTP Code', r.http_code || '—'],
@@ -313,6 +380,8 @@ function detailRow(r) {
         ['Content Size', r.content_bytes !== null ? (r.content_bytes / 1024).toFixed(1) + ' KB' : '—'],
         ['Server Port', r.server_port || '—'],
         ['Redirected To', r.redirect_url || '—'],
+        ['Platform', r.platform ? `${r.platform} (${r.migrated_to_new ? 'New server' : 'Old server'})` : 'Unknown'],
+        ['Legacy (old.) Copy', r.legacy_exists === true ? `Live — HTTP ${r.legacy_http_code}` : (r.legacy_exists === false ? 'Not found' : 'Not checked')],
         ['Checked At', r.checked_at || '—'],
     ];
     let html = `<div class="detail-grid">`;
@@ -323,7 +392,7 @@ function detailRow(r) {
         html += `<div class="detail-item" style="grid-column:1/-1;"><div class="di-label">Error</div><div class="di-value error-text">${escapeHtml(r.error)}</div></div>`;
     }
     html += `</div>`;
-    return `<tr class="detail-row"><td colspan="9">${html}</td></tr>`;
+    return `<tr class="detail-row"><td colspan="12">${html}</td></tr>`;
 }
 
 function buildServerSummary() {
@@ -331,7 +400,7 @@ function buildServerSummary() {
     ALL_RECORDS.forEach(r => {
         const key = r.server_ip || '__unknown__';
         if (!groups.has(key)) {
-            groups.set(key, { ip: r.server_ip, total: 0, up: 0, down: 0, provinces: new Set(), respSum: 0, respCount: 0 });
+            groups.set(key, { ip: r.server_ip, label: r.server_label, total: 0, up: 0, down: 0, provinces: new Set(), respSum: 0, respCount: 0 });
         }
         const g = groups.get(key);
         g.total++;
@@ -346,7 +415,7 @@ function buildServerSummary() {
     const rows = [...groups.values()].sort((a, b) => b.total - a.total);
 
     document.getElementById('serverSummaryBody').innerHTML = rows.map(g => {
-        const label = g.ip ? g.ip : 'No response / Unreachable';
+        const label = g.label || (g.ip ? g.ip : 'No response / Unreachable');
         const avgMs = g.respCount ? Math.round(g.respSum / g.respCount) + 'ms' : '—';
         return `<tr class="expandable" data-server-ip="${escapeHtml(g.ip || '')}">
             <td class="mono">${escapeHtml(label)}</td>
@@ -395,6 +464,9 @@ function render() {
             <td>${statusBadge(r.status)}</td>
             <td>${respBadge(r.response_ms)}</td>
             <td class="mono">${escapeHtml(r.server_ip || '—')}</td>
+            <td>${platformBadge(r)}</td>
+            <td>${legacyCell(r)}</td>
+            <td>${checkNowButton(r.lgid)}</td>
         </tr>`;
         return mainRow + (isExpanded ? detailRow(r) : '');
     }).join('');

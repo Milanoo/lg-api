@@ -150,6 +150,10 @@ $moduleStatsJson = json_encode($moduleStats, JSON_UNESCAPED_UNICODE | JSON_HEX_A
         <option value="<?= htmlspecialchars($m['key']) ?>"><?= htmlspecialchars($m['label']) ?></option>
       <?php endforeach; ?>
     </select>
+    <label id="checkLegacyWrap" style="display:none; align-items:center; gap:6px; font-size:12px; color: var(--text-muted); margin-left:6px;">
+      <input type="checkbox" id="checkLegacy" checked>
+      Also check old.&lt;domain&gt; legacy copies (roughly doubles concurrency per batch, similar total time)
+    </label>
     <a id="viewLink" href="#" class="btn-reset" style="text-decoration:none;">View this directory &rarr;</a>
   </div>
 
@@ -192,6 +196,8 @@ const MODULE_STATS = <?= $moduleStatsJson ?>;
 
 const els = {
     moduleSelect: document.getElementById('moduleSelect'),
+    checkLegacyWrap: document.getElementById('checkLegacyWrap'),
+    checkLegacy: document.getElementById('checkLegacy'),
     viewLink: document.getElementById('viewLink'),
     btnRefreshAll: document.getElementById('btnRefreshAll'),
     btnRetryFailed: document.getElementById('btnRetryFailed'),
@@ -224,6 +230,7 @@ function loadModuleUi(key) {
     els.okLabel.textContent = isWebsite ? 'Up' : 'LGs with data';
     els.failLabel.textContent = isWebsite ? 'Down / Unreachable' : 'Failed';
     els.retryLabel.textContent = isWebsite ? 'Down' : 'Failed';
+    els.checkLegacyWrap.style.display = isWebsite ? 'flex' : 'none';
     els.viewLink.href = m.view_page || '#';
     els.statOk.textContent = m.ok;
     els.statFail.textContent = m.fail;
@@ -270,7 +277,11 @@ function startFetch(mode) {
     const m = MODULE_STATS[currentModuleKey];
     if (mode === 'full' && !confirm(`This will contact all Local Government websites for "${m.label}". Continue?`)) return;
 
-    const url = mode === 'retry_failed' ? `${m.fetch_endpoint}?mode=retry_failed` : m.fetch_endpoint;
+    const params = new URLSearchParams();
+    if (mode === 'retry_failed') params.set('mode', 'retry_failed');
+    if (m.kind === 'website_status') params.set('check_legacy', els.checkLegacy.checked ? '1' : '0');
+    const qs = params.toString();
+    const url = qs ? `${m.fetch_endpoint}?${qs}` : m.fetch_endpoint;
     els.logPanel.innerHTML = '';
     els.progressWrap.classList.add('active');
     els.progressLabel.textContent = mode === 'retry_failed' ? 'Retrying failed LGs...' : 'Fetching all LGs...';

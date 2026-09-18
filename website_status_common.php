@@ -21,6 +21,62 @@ require_once __DIR__ . '/staff_common.php'; // reuse load_lg_list(), lg_field(),
 
 define('WEBSITE_STATUS_CACHE_FILE', __DIR__ . '/website_status_data.json');
 
+// ------------------------------------------------------------
+// Known infrastructure.
+//
+// Most LG sites sit on one of two older Drupal servers; the
+// ministry is gradually moving sites to a new Django server.
+// When a site moves, the old Drupal copy is NOT torn down - it
+// stays reachable at old.<domain>. Update this map if servers
+// change or new ones are added.
+// ------------------------------------------------------------
+define('NEW_SERVER_IP', '103.69.127.59');
+
+define('KNOWN_SERVERS', [
+    '103.69.124.140' => ['label' => 'Old Server 1', 'platform' => 'Drupal', 'role' => 'legacy'],
+    '103.69.127.8'   => ['label' => 'Old Server 2', 'platform' => 'Drupal', 'role' => 'legacy'],
+    NEW_SERVER_IP    => ['label' => 'New Server',   'platform' => 'Django', 'role' => 'migration_target'],
+]);
+
+/**
+ * Human-readable label for a server IP, e.g. "103.69.127.59 (New
+ * Server · Django)" - falls back to the bare IP if unrecognized.
+ */
+function server_label($ip)
+{
+    if (!$ip) {
+        return 'Unreachable';
+    }
+    if (isset(KNOWN_SERVERS[$ip])) {
+        $s = KNOWN_SERVERS[$ip];
+        return "{$ip} ({$s['label']} \xC2\xB7 {$s['platform']})";
+    }
+    return $ip;
+}
+
+/**
+ * Platform guess for a server IP ('Drupal' / 'Django' / null if
+ * the IP isn't one of the known infrastructure addresses).
+ */
+function server_platform($ip)
+{
+    return $ip && isset(KNOWN_SERVERS[$ip]) ? KNOWN_SERVERS[$ip]['platform'] : null;
+}
+
+/**
+ * Build the old.<host> legacy URL for a normalized site URL.
+ * Returns null if the URL can't be parsed.
+ */
+function legacy_domain_url($url)
+{
+    $parts = parse_url($url);
+    if (!$parts || empty($parts['host'])) {
+        return null;
+    }
+    $scheme = $parts['scheme'] ?? 'https';
+    return $scheme . '://old.' . $parts['host'];
+}
+
 /**
  * Pull the Server: header value out of a raw HTTP header block.
  */
@@ -76,10 +132,99 @@ function build_website_status_record($lg, $curlInfo, $curlErr, $headersRaw)
         'ttfb_ms'       => isset($curlInfo['starttransfer_time']) ? (int) round($curlInfo['starttransfer_time'] * 1000) : null,
         'server_ip'     => $curlInfo['primary_ip'] ?? null,
         'server_port'   => $curlInfo['primary_port'] ?? null,
+        'server_label'  => server_label($curlInfo['primary_ip'] ?? null),
+        'platform'      => server_platform($curlInfo['primary_ip'] ?? null),
+        'migrated_to_new' => ($curlInfo['primary_ip'] ?? null) === NEW_SERVER_IP,
         'ssl_verified'  => isset($curlInfo['ssl_verify_result']) ? ($curlInfo['ssl_verify_result'] === 0) : null,
         'redirect_url'  => $curlInfo['redirect_url'] ?? null,
         'content_bytes' => isset($curlInfo['size_download']) ? (int) $curlInfo['size_download'] : null,
         'server_header' => extract_server_header($headersRaw),
+        // Legacy (old.<domain>) fields - filled in by the caller when a
+        // legacy check is performed; null means "not checked this run",
+        // distinct from false ("checked, and it's not there").
+        'legacy_exists'     => null,
+        'legacy_http_code'  => null,
+        'legacy_url'        => null,
         'checked_at'    => date('Y-m-d H:i:s'),
     ];
+}
+
+/**
+ * Probe the old.<domain> legacy copy of a site. Deliberately
+ * lightweight (HEAD-style, no header capture) - we only need to
+ * know whether it still responds, not its full diagnostics.
+ * Returns ['legacy_exists' => bool, 'legacy_http_code' => int, 'legacy_url' => string|null].
+ */
+function probe_legacy_domain($mainUrl, $timeout, $connectTimeout)
+{
+    $legacyUrl = legacy_domain_url($mainUrl);
+    if (!$legacyUrl) {
+        return ['legacy_exists' => null, 'legacy_http_code' => null, 'legacy_url' => null];
+    }
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $legacyUrl,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_NOBODY => true,
+        CURLOPT_CONNECTTIMEOUT => $connectTimeout,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 5,
+        CURLOPT_USERAGENT => 'PLGSP-LG-Website-Monitor/1.0 (+Gandaki Province OCMCM)',
+    ]);
+    curl_exec($ch);
+    $err = curl_error($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $exists = $err === '' && $httpCode >= 200 && $httpCode < 400;
+
+    return [
+        'legacy_exists'    => $exists,
+        'legacy_http_code' => $httpCode,
+        'legacy_url'       => $legacyUrl,
+    ];
+}
+
+/**
+ * Synchronously probe ONE LG (main site, optionally + legacy copy).
+ * Used by the per-row "Check now" button - a single ad hoc request,
+ * not the bulk parallel fetch. Returns the combined record; does
+ * NOT write to the cache (the caller decides whether to persist it).
+ */
+function probe_one_lg_sync($lg, $timeout = 20, $connectTimeout = 10, $checkLegacy = true)
+{
+    $mainUrl = normalize_domain($lg['domain'] ?? '');
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $mainUrl,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER => true,
+        CURLOPT_CONNECTTIMEOUT => $connectTimeout,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 5,
+        CURLOPT_ENCODING => '',
+        CURLOPT_USERAGENT => 'PLGSP-LG-Website-Monitor/1.0 (+Gandaki Province OCMCM)',
+    ]);
+    $raw = curl_exec($ch);
+    $err = curl_error($ch);
+    $curlInfo = curl_getinfo($ch);
+    curl_close($ch);
+
+    $headerSize = $curlInfo['header_size'] ?? 0;
+    $headersRaw = $raw !== false ? substr($raw, 0, $headerSize) : '';
+
+    $entry = build_website_status_record($lg, $curlInfo, $err, $headersRaw);
+
+    if ($checkLegacy) {
+        $legacy = probe_legacy_domain($mainUrl, $timeout, $connectTimeout);
+        $entry = array_merge($entry, $legacy);
+    }
+
+    return $entry;
 }

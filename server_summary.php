@@ -171,12 +171,16 @@ function buildPivot() {
     const provinceTotals = new Map();
     const serverTotals = new Map();
     const cellData = new Map(); // "province|||serverKey" -> { total, down }
+    const serverLabels = new Map(); // serverKey -> friendly label
 
     records.forEach(r => {
         const province = r.province || 'Unknown';
         const serverKey = r.server_ip || '__unknown__';
         provinceTotals.set(province, (provinceTotals.get(province) || 0) + 1);
         serverTotals.set(serverKey, (serverTotals.get(serverKey) || 0) + 1);
+        if (!serverLabels.has(serverKey)) {
+            serverLabels.set(serverKey, r.server_label || serverKey);
+        }
 
         const cellKey = `${province}|||${serverKey}`;
         if (!cellData.has(cellKey)) cellData.set(cellKey, { total: 0, down: 0 });
@@ -190,7 +194,7 @@ function buildPivot() {
 
     let html = '<thead><tr><th class="corner">Province</th>';
     servers.forEach(s => {
-        const label = s === '__unknown__' ? 'Unreachable' : s;
+        const label = s === '__unknown__' ? 'Unreachable' : (serverLabels.get(s) || s);
         html += `<th>${escapeHtml(label)}</th>`;
     });
     html += '<th>Total</th></tr></thead><tbody>';
