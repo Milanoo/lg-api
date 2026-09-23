@@ -20,6 +20,7 @@
 require_once __DIR__ . '/staff_common.php'; // reuse load_lg_list(), lg_field(), normalize_domain(), load_cache(), save_cache()
 
 define('WEBSITE_STATUS_CACHE_FILE', __DIR__ . '/website_status_data.json');
+date_default_timezone_set('Asia/Kathmandu');
 
 // ------------------------------------------------------------
 // Known infrastructure.
@@ -145,7 +146,7 @@ function build_website_status_record($lg, $curlInfo, $curlErr, $headersRaw)
         'legacy_exists'     => null,
         'legacy_http_code'  => null,
         'legacy_url'        => null,
-        'checked_at'    => date('Y-m-d H:i:s'),
+        'checked_at'        => date('Y-m-d H:i:s'),
     ];
 }
 

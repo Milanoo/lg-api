@@ -82,10 +82,62 @@ $modulesJson = json_encode(
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="5"/><path d="M10 10 L14 14" stroke-linecap="round"/></svg>
       <input type="text" id="filterSearch" placeholder="Search name, position, phone, email…">
     </div>
-    <select id="filterProvince" class="filter-select"><option value="">All Provinces</option></select>
-    <select id="filterDistrict" class="filter-select"><option value="">All Districts</option></select>
-    <select id="filterLG" class="filter-select"><option value="">All LGs</option></select>
-    <select id="filterDesignation" class="filter-select"><option value="">All Designations</option></select>
+    <div class="filter-multiselect" id="provinceFilterWrap">
+      <button class="filter-multiselect-trigger" id="filterProvinceToggle" type="button" aria-expanded="false">
+        <span id="filterProvinceLabel">All Provinces</span>
+        <span class="filter-multiselect-caret">▾</span>
+      </button>
+      <div class="filter-multiselect-panel" id="filterProvincePanel">
+        <div class="filter-multiselect-header">
+          <input type="text" id="filterProvinceSearch" placeholder="Search province..." autocomplete="off">
+          <button class="filter-multiselect-selectall" id="filterProvinceSelectAll" type="button">Select all</button>
+          <button class="filter-multiselect-clear" id="filterProvinceClear" type="button">Reset</button>
+        </div>
+        <div class="filter-multiselect-options" id="filterProvinceOptions"></div>
+      </div>
+    </div>
+    <div class="filter-multiselect" id="districtFilterWrap">
+      <button class="filter-multiselect-trigger" id="filterDistrictToggle" type="button" aria-expanded="false">
+        <span id="filterDistrictLabel">All Districts</span>
+        <span class="filter-multiselect-caret">▾</span>
+      </button>
+      <div class="filter-multiselect-panel" id="filterDistrictPanel">
+        <div class="filter-multiselect-header">
+          <input type="text" id="filterDistrictSearch" placeholder="Search district..." autocomplete="off">
+          <button class="filter-multiselect-selectall" id="filterDistrictSelectAll" type="button">Select all</button>
+          <button class="filter-multiselect-clear" id="filterDistrictClear" type="button">Reset</button>
+        </div>
+        <div class="filter-multiselect-options" id="filterDistrictOptions"></div>
+      </div>
+    </div>
+    <div class="filter-multiselect" id="lgFilterWrap">
+      <button class="filter-multiselect-trigger" id="filterLGToggle" type="button" aria-expanded="false">
+        <span id="filterLGLabel">All LGs</span>
+        <span class="filter-multiselect-caret">▾</span>
+      </button>
+      <div class="filter-multiselect-panel" id="filterLGPanel">
+        <div class="filter-multiselect-header">
+          <input type="text" id="filterLGSearch" placeholder="Search LG..." autocomplete="off">
+          <button class="filter-multiselect-selectall" id="filterLGSelectAll" type="button">Select all</button>
+          <button class="filter-multiselect-clear" id="filterLGClear" type="button">Reset</button>
+        </div>
+        <div class="filter-multiselect-options" id="filterLGOptions"></div>
+      </div>
+    </div>
+    <div class="filter-multiselect" id="designationFilterWrap">
+      <button class="filter-multiselect-trigger" id="filterDesignationToggle" type="button" aria-expanded="false">
+        <span id="filterDesignationLabel">All Designations</span>
+        <span class="filter-multiselect-caret">▾</span>
+      </button>
+      <div class="filter-multiselect-panel" id="filterDesignationPanel">
+        <div class="filter-multiselect-header">
+          <input type="text" id="filterDesignationSearch" placeholder="Search designation..." autocomplete="off">
+          <button class="filter-multiselect-selectall" id="filterDesignationSelectAll" type="button">Select all</button>
+          <button class="filter-multiselect-clear" id="filterDesignationClear" type="button">Reset</button>
+        </div>
+        <div class="filter-multiselect-options" id="filterDesignationOptions"></div>
+      </div>
+    </div>
     <button id="resetFilters" class="btn-reset" type="button">Reset</button>
   </div>
 </div>
@@ -137,10 +189,34 @@ const MODULES = <?= $modulesJson ?: '[]' ?>;
 const CURRENT_MODULE = <?= json_encode($currentModuleKey) ?>;
 
 const els = {
-    province: document.getElementById('filterProvince'),
-    district: document.getElementById('filterDistrict'),
-    lg: document.getElementById('filterLG'),
-    designation: document.getElementById('filterDesignation'),
+    province: document.getElementById('filterProvinceToggle'),
+    provincePanel: document.getElementById('filterProvincePanel'),
+    provinceSearch: document.getElementById('filterProvinceSearch'),
+    provinceOptions: document.getElementById('filterProvinceOptions'),
+    provinceSelectAll: document.getElementById('filterProvinceSelectAll'),
+    provinceClear: document.getElementById('filterProvinceClear'),
+    provinceLabel: document.getElementById('filterProvinceLabel'),
+    district: document.getElementById('filterDistrictToggle'),
+    districtPanel: document.getElementById('filterDistrictPanel'),
+    districtSearch: document.getElementById('filterDistrictSearch'),
+    districtOptions: document.getElementById('filterDistrictOptions'),
+    districtSelectAll: document.getElementById('filterDistrictSelectAll'),
+    districtClear: document.getElementById('filterDistrictClear'),
+    districtLabel: document.getElementById('filterDistrictLabel'),
+    lg: document.getElementById('filterLGToggle'),
+    lgPanel: document.getElementById('filterLGPanel'),
+    lgSearch: document.getElementById('filterLGSearch'),
+    lgOptions: document.getElementById('filterLGOptions'),
+    lgSelectAll: document.getElementById('filterLGSelectAll'),
+    lgClear: document.getElementById('filterLGClear'),
+    lgLabel: document.getElementById('filterLGLabel'),
+    designation: document.getElementById('filterDesignationToggle'),
+    designationPanel: document.getElementById('filterDesignationPanel'),
+    designationSearch: document.getElementById('filterDesignationSearch'),
+    designationOptions: document.getElementById('filterDesignationOptions'),
+    designationSelectAll: document.getElementById('filterDesignationSelectAll'),
+    designationClear: document.getElementById('filterDesignationClear'),
+    designationLabel: document.getElementById('filterDesignationLabel'),
     search: document.getElementById('filterSearch'),
     reset: document.getElementById('resetFilters'),
     grid: document.getElementById('grid'),
@@ -158,6 +234,10 @@ let currentView = 'gallery';
 let currentPage = 1;
 let pageSize = 60;
 let searchDebounce = null;
+let selectedProvinces = [];
+let selectedDistricts = [];
+let selectedLgs = [];
+let selectedDesignations = [];
 
 /* ── Soft avatar palette, matched to the GIOMS design system ── */
 const PALETTES = [
@@ -208,32 +288,111 @@ function populateSelect(select, values, placeholder) {
     if (values.includes(current)) select.value = current;
 }
 
+function syncMultiSelectLabel(name, selectedValues) {
+    const label = name === 'province' ? 'All Provinces' : name === 'district' ? 'All Districts' : name === 'lg' ? 'All LGs' : 'All Designations';
+    const element = name === 'province' ? els.provinceLabel : name === 'district' ? els.districtLabel : name === 'lg' ? els.lgLabel : els.designationLabel;
+
+    if (!selectedValues.length) {
+        element.textContent = label;
+        return;
+    }
+    element.textContent = selectedValues.length === 1 ? selectedValues[0] : `${selectedValues.length} selected`;
+}
+
+function renderMultiSelectOptions(name, values, selectedValues) {
+    const allValues = uniqueSorted(values);
+    const search = (els[`${name}Search`].value || '').trim().toLowerCase();
+    const filtered = search
+        ? allValues.filter(v => v.toLowerCase().includes(search))
+        : allValues;
+    const selectAllButton = els[`${name}SelectAll`];
+    const optionsContainer = els[`${name}Options`];
+
+    const allVisibleSelected = filtered.length > 0 && filtered.every(value => selectedValues.includes(value));
+    selectAllButton.textContent = allVisibleSelected ? 'Clear visible' : 'Select all';
+    selectAllButton.disabled = filtered.length === 0;
+
+    if (!filtered.length) {
+        optionsContainer.innerHTML = '<div class="filter-empty-state">No results found</div>';
+        return;
+    }
+
+    optionsContainer.innerHTML = filtered.map(value => {
+        const checked = selectedValues.includes(value) ? 'checked' : '';
+        return `
+            <label class="filter-option-item">
+                <input type="checkbox" class="filter-option-check" value="${escapeHtml(value)}" ${checked}>
+                <span>${escapeHtml(value)}</span>
+            </label>
+        `;
+    }).join('');
+
+    optionsContainer.querySelectorAll('.filter-option-check').forEach(checkbox => {
+        checkbox.addEventListener('change', (event) => {
+            const value = event.target.value;
+            if (event.target.checked) {
+                if (!selectedValues.includes(value)) selectedValues.push(value);
+            } else {
+                const idx = selectedValues.indexOf(value);
+                if (idx !== -1) selectedValues.splice(idx, 1);
+            }
+            syncMultiSelectLabel(name, selectedValues);
+            if (name === 'province') {
+                const provincePool = selectedProvinces.length ? ALL_STAFF.filter(s => selectedProvinces.includes(s.province)) : ALL_STAFF;
+                const validDistricts = uniqueSorted(provincePool.map(s => s.district));
+                selectedDistricts = selectedDistricts.filter(v => validDistricts.includes(v));
+                const validLgs = uniqueSorted((selectedDistricts.length ? provincePool.filter(s => selectedDistricts.includes(s.district)) : provincePool).map(s => s.lg_name));
+                selectedLgs = selectedLgs.filter(v => validLgs.includes(v));
+            }
+            if (name === 'district') {
+                const provincePool = selectedProvinces.length ? ALL_STAFF.filter(s => selectedProvinces.includes(s.province)) : ALL_STAFF;
+                const validLgs = uniqueSorted((selectedDistricts.length ? provincePool.filter(s => selectedDistricts.includes(s.district)) : provincePool).map(s => s.lg_name));
+                selectedLgs = selectedLgs.filter(v => validLgs.includes(v));
+            }
+            currentPage = 1;
+            refreshFilterOptions();
+            render();
+        });
+    });
+}
+
 function refreshFilterOptions() {
-    populateSelect(els.province, uniqueSorted(ALL_STAFF.map(s => s.province)), 'All Provinces');
+    const provinceValues = uniqueSorted(ALL_STAFF.map(s => s.province));
+    selectedProvinces = selectedProvinces.filter(value => provinceValues.includes(value));
 
-    const province = els.province.value;
-    let pool = province ? ALL_STAFF.filter(s => s.province === province) : ALL_STAFF;
-    populateSelect(els.district, uniqueSorted(pool.map(s => s.district)), 'All Districts');
+    const provincePool = selectedProvinces.length ? ALL_STAFF.filter(s => selectedProvinces.includes(s.province)) : ALL_STAFF;
+    const districtValues = uniqueSorted(provincePool.map(s => s.district));
+    selectedDistricts = selectedDistricts.filter(value => districtValues.includes(value));
 
-    const district = els.district.value;
-    if (district) pool = pool.filter(s => s.district === district);
-    populateSelect(els.lg, uniqueSorted(pool.map(s => s.lg_name)), 'All LGs');
+    const districtPool = selectedDistricts.length ? provincePool.filter(s => selectedDistricts.includes(s.district)) : provincePool;
+    const lgValues = uniqueSorted(districtPool.map(s => s.lg_name));
+    selectedLgs = selectedLgs.filter(value => lgValues.includes(value));
 
-    populateSelect(els.designation, uniqueSorted(ALL_STAFF.map(s => s.designation)), 'All Designations');
+    renderMultiSelectOptions('province', provinceValues, selectedProvinces);
+    syncMultiSelectLabel('province', selectedProvinces);
+    renderMultiSelectOptions('district', districtValues, selectedDistricts);
+    syncMultiSelectLabel('district', selectedDistricts);
+    renderMultiSelectOptions('lg', lgValues, selectedLgs);
+    syncMultiSelectLabel('lg', selectedLgs);
+
+    const designations = uniqueSorted(ALL_STAFF.map(s => s.designation));
+    selectedDesignations = selectedDesignations.filter(value => designations.includes(value));
+    renderMultiSelectOptions('designation', designations, selectedDesignations);
+    syncMultiSelectLabel('designation', selectedDesignations);
 }
 
 function getFiltered() {
-    const province = els.province.value;
-    const district = els.district.value;
-    const lg = els.lg.value;
-    const designation = els.designation.value;
+    const provinceSet = new Set(selectedProvinces);
+    const districtSet = new Set(selectedDistricts);
+    const lgSet = new Set(selectedLgs);
+    const designationSet = new Set(selectedDesignations);
     const search = els.search.value.trim().toLowerCase();
 
     return ALL_STAFF.filter(s => {
-        if (province && s.province !== province) return false;
-        if (district && s.district !== district) return false;
-        if (lg && s.lg_name !== lg) return false;
-        if (designation && s.designation !== designation) return false;
+        if (provinceSet.size > 0 && !provinceSet.has(s.province)) return false;
+        if (districtSet.size > 0 && !districtSet.has(s.district)) return false;
+        if (lgSet.size > 0 && !lgSet.has(s.lg_name)) return false;
+        if (designationSet.size > 0 && !designationSet.has(s.designation)) return false;
         if (search) {
             const haystack = [s.name, s.section, s.phone, s.email, s.designation].join(' ').toLowerCase();
             if (!haystack.includes(search)) return false;
@@ -402,21 +561,113 @@ document.addEventListener('click', (e) => {
 // ------------------------------------------------------------
 // Wire up filters
 // ------------------------------------------------------------
-function onFilterChange() { currentPage = 1; refreshFilterOptions(); render(); }
+function closeAllFilterPanels(exceptName = null) {
+    const panels = ['province', 'district', 'lg', 'designation'];
+    panels.forEach(name => {
+        if (name === exceptName) return;
+        const panel = els[`${name}Panel`];
+        if (panel) panel.classList.remove('open');
+        const trigger = els[name];
+        if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    });
+}
 
-els.province.addEventListener('change', onFilterChange);
-els.district.addEventListener('change', onFilterChange);
-els.lg.addEventListener('change', () => { currentPage = 1; render(); });
-els.designation.addEventListener('change', () => { currentPage = 1; render(); });
+function toggleFilterPanel(name) {
+    const panel = els[`${name}Panel`];
+    const trigger = els[name];
+    const isOpen = panel.classList.contains('open');
+    closeAllFilterPanels(name);
+    panel.classList.toggle('open', !isOpen);
+    trigger.setAttribute('aria-expanded', String(!isOpen));
+    if (!isOpen) {
+        els[`${name}Search`].focus();
+    }
+}
+
+const filterConfig = [
+    { name: 'province', values: () => uniqueSorted(ALL_STAFF.map(s => s.province)), selected: () => selectedProvinces },
+    { name: 'district', values: () => uniqueSorted((selectedProvinces.length ? ALL_STAFF.filter(s => selectedProvinces.includes(s.province)) : ALL_STAFF).map(s => s.district)), selected: () => selectedDistricts },
+    { name: 'lg', values: () => uniqueSorted((selectedProvinces.length ? ALL_STAFF.filter(s => selectedProvinces.includes(s.province)) : ALL_STAFF).filter(s => selectedDistricts.length ? selectedDistricts.includes(s.district) : true).map(s => s.lg_name)), selected: () => selectedLgs },
+    { name: 'designation', values: () => uniqueSorted(ALL_STAFF.map(s => s.designation)), selected: () => selectedDesignations },
+];
+
+function bindMultiSelect(name) {
+    const trigger = els[name];
+    const panel = els[`${name}Panel`];
+    const searchInput = els[`${name}Search`];
+    const clearButton = els[`${name}Clear`];
+    const selectAllButton = els[`${name}SelectAll`];
+
+    trigger.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleFilterPanel(name);
+    });
+
+    searchInput.addEventListener('input', () => {
+        const values = filterConfig.find(item => item.name === name).values();
+        const selected = filterConfig.find(item => item.name === name).selected();
+        renderMultiSelectOptions(name, values, selected);
+    });
+
+    selectAllButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const values = filterConfig.find(item => item.name === name).values();
+        const selected = filterConfig.find(item => item.name === name).selected();
+        const query = (searchInput.value || '').trim().toLowerCase();
+        const visible = query ? values.filter(value => value.toLowerCase().includes(query)) : values;
+        const allVisibleSelected = visible.length > 0 && visible.every(value => selected.includes(value));
+
+        if (allVisibleSelected) {
+            selected.splice(0, selected.length, ...selected.filter(value => !visible.includes(value)));
+        } else {
+            visible.forEach(value => {
+                if (!selected.includes(value)) selected.push(value);
+            });
+        }
+        renderMultiSelectOptions(name, values, selected);
+        syncMultiSelectLabel(name, selected);
+        currentPage = 1;
+        render();
+    });
+
+    clearButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const selected = filterConfig.find(item => item.name === name).selected();
+        selected.splice(0, selected.length);
+        searchInput.value = '';
+        const values = filterConfig.find(item => item.name === name).values();
+        renderMultiSelectOptions(name, values, selected);
+        syncMultiSelectLabel(name, selected);
+        currentPage = 1;
+        render();
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!panel.contains(event.target) && !trigger.contains(event.target)) {
+            panel.classList.remove('open');
+            trigger.setAttribute('aria-expanded', 'false');
+        }
+    });
+}
+
+bindMultiSelect('province');
+bindMultiSelect('district');
+bindMultiSelect('lg');
+bindMultiSelect('designation');
+
 els.search.addEventListener('input', () => {
     clearTimeout(searchDebounce);
     searchDebounce = setTimeout(() => { currentPage = 1; render(); }, 250);
 });
 els.reset.addEventListener('click', () => {
-    els.province.value = '';
-    els.district.value = '';
-    els.lg.value = '';
-    els.designation.value = '';
+    selectedProvinces = [];
+    selectedDistricts = [];
+    selectedLgs = [];
+    selectedDesignations = [];
+    els.provinceSearch.value = '';
+    els.districtSearch.value = '';
+    els.lgSearch.value = '';
+    els.designationSearch.value = '';
     els.search.value = '';
     currentPage = 1;
     refreshFilterOptions();

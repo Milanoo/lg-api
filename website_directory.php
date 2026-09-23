@@ -149,9 +149,48 @@ $modulesJson = json_encode(
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="5"/><path d="M10 10 L14 14" stroke-linecap="round"/></svg>
         <input type="text" id="filterSearch" placeholder="Search LG name, domain, IP…">
       </div>
-      <select id="filterProvince" class="filter-select"><option value="">All Provinces</option></select>
-      <select id="filterDistrict" class="filter-select"><option value="">All Districts</option></select>
-      <select id="filterLG" class="filter-select"><option value="">All LGs</option></select>
+      <div class="filter-multiselect" id="provinceFilterWrap">
+        <button class="filter-multiselect-trigger" id="filterProvinceToggle" type="button" aria-expanded="false">
+          <span id="filterProvinceLabel">All Provinces</span>
+          <span class="filter-multiselect-caret">▾</span>
+        </button>
+        <div class="filter-multiselect-panel" id="filterProvincePanel">
+          <div class="filter-multiselect-header">
+            <input type="text" id="filterProvinceSearch" placeholder="Search province..." autocomplete="off">
+            <button class="filter-multiselect-selectall" id="filterProvinceSelectAll" type="button">Select all</button>
+            <button class="filter-multiselect-clear" id="filterProvinceClear" type="button">Reset</button>
+          </div>
+          <div class="filter-multiselect-options" id="filterProvinceOptions"></div>
+        </div>
+      </div>
+      <div class="filter-multiselect" id="districtFilterWrap">
+        <button class="filter-multiselect-trigger" id="filterDistrictToggle" type="button" aria-expanded="false">
+          <span id="filterDistrictLabel">All Districts</span>
+          <span class="filter-multiselect-caret">▾</span>
+        </button>
+        <div class="filter-multiselect-panel" id="filterDistrictPanel">
+          <div class="filter-multiselect-header">
+            <input type="text" id="filterDistrictSearch" placeholder="Search district..." autocomplete="off">
+            <button class="filter-multiselect-selectall" id="filterDistrictSelectAll" type="button">Select all</button>
+            <button class="filter-multiselect-clear" id="filterDistrictClear" type="button">Reset</button>
+          </div>
+          <div class="filter-multiselect-options" id="filterDistrictOptions"></div>
+        </div>
+      </div>
+      <div class="filter-multiselect" id="lgFilterWrap">
+        <button class="filter-multiselect-trigger" id="filterLGToggle" type="button" aria-expanded="false">
+          <span id="filterLGLabel">All LGs</span>
+          <span class="filter-multiselect-caret">▾</span>
+        </button>
+        <div class="filter-multiselect-panel" id="filterLGPanel">
+          <div class="filter-multiselect-header">
+            <input type="text" id="filterLGSearch" placeholder="Search LG..." autocomplete="off">
+            <button class="filter-multiselect-selectall" id="filterLGSelectAll" type="button">Select all</button>
+            <button class="filter-multiselect-clear" id="filterLGClear" type="button">Reset</button>
+          </div>
+          <div class="filter-multiselect-options" id="filterLGOptions"></div>
+        </div>
+      </div>
       <select id="filterStatus" class="filter-select">
         <option value="">All Statuses</option>
         <option value="ok">Up</option>
@@ -189,7 +228,6 @@ $modulesJson = json_encode(
       <thead>
         <tr>
           <th style="width:20px;"></th>
-          <th>LG Code</th>
           <th>Province</th>
           <th>District</th>
           <th>LG Name</th>
@@ -198,7 +236,7 @@ $modulesJson = json_encode(
           <th>Response</th>
           <th>Server IP</th>
           <th>Platform</th>
-          <th>Legacy Copy</th>
+          <th>Old Copy</th>
           <th></th>
         </tr>
       </thead>
@@ -220,9 +258,27 @@ const MODULES = <?= $modulesJson ?: '[]' ?>;
 const CURRENT_MODULE = <?= json_encode($currentModuleKey) ?>;
 
 const els = {
-    province: document.getElementById('filterProvince'),
-    district: document.getElementById('filterDistrict'),
-    lg: document.getElementById('filterLG'),
+    province: document.getElementById('filterProvinceToggle'),
+    provincePanel: document.getElementById('filterProvincePanel'),
+    provinceSearch: document.getElementById('filterProvinceSearch'),
+    provinceOptions: document.getElementById('filterProvinceOptions'),
+    provinceSelectAll: document.getElementById('filterProvinceSelectAll'),
+    provinceClear: document.getElementById('filterProvinceClear'),
+    provinceLabel: document.getElementById('filterProvinceLabel'),
+    district: document.getElementById('filterDistrictToggle'),
+    districtPanel: document.getElementById('filterDistrictPanel'),
+    districtSearch: document.getElementById('filterDistrictSearch'),
+    districtOptions: document.getElementById('filterDistrictOptions'),
+    districtSelectAll: document.getElementById('filterDistrictSelectAll'),
+    districtClear: document.getElementById('filterDistrictClear'),
+    districtLabel: document.getElementById('filterDistrictLabel'),
+    lg: document.getElementById('filterLGToggle'),
+    lgPanel: document.getElementById('filterLGPanel'),
+    lgSearch: document.getElementById('filterLGSearch'),
+    lgOptions: document.getElementById('filterLGOptions'),
+    lgSelectAll: document.getElementById('filterLGSelectAll'),
+    lgClear: document.getElementById('filterLGClear'),
+    lgLabel: document.getElementById('filterLGLabel'),
     status: document.getElementById('filterStatus'),
     serverIp: document.getElementById('filterServerIp'),
     sortBy: document.getElementById('sortBy'),
@@ -241,6 +297,9 @@ let currentPage = 1;
 let pageSize = 60;
 let searchDebounce = null;
 let expandedLgid = null;
+let selectedProvinces = [];
+let selectedDistricts = [];
+let selectedLgs = [];
 
 function escapeHtml(str) {
     const div = document.createElement('div');
@@ -264,32 +323,109 @@ function populateSelect(select, values, placeholder) {
     if (values.includes(current)) select.value = current;
 }
 
+function syncMultiSelectLabel(name, selectedValues) {
+    const label = name === 'province' ? 'All Provinces' : name === 'district' ? 'All Districts' : 'All LGs';
+    const element = name === 'province' ? els.provinceLabel : name === 'district' ? els.districtLabel : els.lgLabel;
+
+    if (!selectedValues.length) {
+        element.textContent = label;
+        return;
+    }
+    element.textContent = selectedValues.length === 1 ? selectedValues[0] : `${selectedValues.length} selected`;
+}
+
+function renderMultiSelectOptions(name, values, selectedValues) {
+    const allValues = uniqueSorted(values);
+    const search = (els[`${name}Search`].value || '').trim().toLowerCase();
+    const filtered = search
+        ? allValues.filter(v => v.toLowerCase().includes(search))
+        : allValues;
+    const selectAllButton = els[`${name}SelectAll`];
+    const optionsContainer = els[`${name}Options`];
+
+    const allVisibleSelected = filtered.length > 0 && filtered.every(value => selectedValues.includes(value));
+    selectAllButton.textContent = allVisibleSelected ? 'Clear visible' : 'Select all';
+    selectAllButton.disabled = filtered.length === 0;
+
+    if (!filtered.length) {
+        optionsContainer.innerHTML = '<div class="filter-empty-state">No results found</div>';
+        return;
+    }
+
+    optionsContainer.innerHTML = filtered.map(value => {
+        const checked = selectedValues.includes(value) ? 'checked' : '';
+        return `
+            <label class="filter-option-item">
+                <input type="checkbox" class="filter-option-check" value="${escapeHtml(value)}" ${checked}>
+                <span>${escapeHtml(value)}</span>
+            </label>
+        `;
+    }).join('');
+
+    optionsContainer.querySelectorAll('.filter-option-check').forEach(checkbox => {
+        checkbox.addEventListener('change', (event) => {
+            const value = event.target.value;
+            const selected = filterConfig.find(item => item.name === name).selected();
+            if (event.target.checked) {
+                if (!selected.includes(value)) selected.push(value);
+            } else {
+                const idx = selected.indexOf(value);
+                if (idx !== -1) selected.splice(idx, 1);
+            }
+            syncMultiSelectLabel(name, selected);
+            if (name === 'province') {
+                const provincePool = selectedProvinces.length ? ALL_RECORDS.filter(r => selectedProvinces.includes(r.province)) : ALL_RECORDS;
+                const validDistricts = uniqueSorted(provincePool.map(r => r.district));
+                selectedDistricts = selectedDistricts.filter(v => validDistricts.includes(v));
+                const validLgs = uniqueSorted((selectedDistricts.length ? provincePool.filter(r => selectedDistricts.includes(r.district)) : provincePool).map(r => r.lg_name));
+                selectedLgs = selectedLgs.filter(v => validLgs.includes(v));
+            }
+            if (name === 'district') {
+                const provincePool = selectedProvinces.length ? ALL_RECORDS.filter(r => selectedProvinces.includes(r.province)) : ALL_RECORDS;
+                const validLgs = uniqueSorted((selectedDistricts.length ? provincePool.filter(r => selectedDistricts.includes(r.district)) : provincePool).map(r => r.lg_name));
+                selectedLgs = selectedLgs.filter(v => validLgs.includes(v));
+            }
+            currentPage = 1;
+            refreshFilterOptions();
+            render();
+        });
+    });
+}
+
 function refreshFilterOptions() {
-    populateSelect(els.province, uniqueSorted(ALL_RECORDS.map(s => s.province)), 'All Provinces');
+    const provinceValues = uniqueSorted(ALL_RECORDS.map(s => s.province));
+    selectedProvinces = selectedProvinces.filter(value => provinceValues.includes(value));
 
-    const province = els.province.value;
-    let pool = province ? ALL_RECORDS.filter(s => s.province === province) : ALL_RECORDS;
-    populateSelect(els.district, uniqueSorted(pool.map(s => s.district)), 'All Districts');
+    const provincePool = selectedProvinces.length ? ALL_RECORDS.filter(s => selectedProvinces.includes(s.province)) : ALL_RECORDS;
+    const districtValues = uniqueSorted(provincePool.map(s => s.district));
+    selectedDistricts = selectedDistricts.filter(value => districtValues.includes(value));
 
-    const district = els.district.value;
-    if (district) pool = pool.filter(s => s.district === district);
-    populateSelect(els.lg, uniqueSorted(pool.map(s => s.lg_name)), 'All LGs');
+    const districtPool = selectedDistricts.length ? provincePool.filter(s => selectedDistricts.includes(s.district)) : provincePool;
+    const lgValues = uniqueSorted(districtPool.map(s => s.lg_name));
+    selectedLgs = selectedLgs.filter(value => lgValues.includes(value));
+
+    renderMultiSelectOptions('province', provinceValues, selectedProvinces);
+    syncMultiSelectLabel('province', selectedProvinces);
+    renderMultiSelectOptions('district', districtValues, selectedDistricts);
+    syncMultiSelectLabel('district', selectedDistricts);
+    renderMultiSelectOptions('lg', lgValues, selectedLgs);
+    syncMultiSelectLabel('lg', selectedLgs);
 
     populateSelect(els.serverIp, uniqueSorted(ALL_RECORDS.map(s => s.server_ip)), 'All Servers');
 }
 
 function getFiltered() {
-    const province = els.province.value;
-    const district = els.district.value;
-    const lg = els.lg.value;
+    const provinceSet = new Set(selectedProvinces);
+    const districtSet = new Set(selectedDistricts);
+    const lgSet = new Set(selectedLgs);
     const status = els.status.value;
     const serverIp = els.serverIp.value;
     const search = els.search.value.trim().toLowerCase();
 
     let rows = ALL_RECORDS.filter(r => {
-        if (province && r.province !== province) return false;
-        if (district && r.district !== district) return false;
-        if (lg && r.lg_name !== lg) return false;
+        if (provinceSet.size > 0 && !provinceSet.has(r.province)) return false;
+        if (districtSet.size > 0 && !districtSet.has(r.district)) return false;
+        if (lgSet.size > 0 && !lgSet.has(r.lg_name)) return false;
         if (status && r.status !== status) return false;
         if (serverIp && r.server_ip !== serverIp) return false;
         if (search) {
@@ -329,7 +465,7 @@ function platformBadge(r) {
         return `<span class="resp-badge none">Unknown IP</span>`;
     }
     const cls = r.migrated_to_new ? 'ok' : 'down';
-    const label = r.migrated_to_new ? `${r.platform} (New)` : `${r.platform} (Old)`;
+    const label = r.migrated_to_new ? `${r.platform}` : `${r.platform}`;
     return `<span class="status-badge ${cls}">${escapeHtml(label)}</span>`;
 }
 
@@ -454,11 +590,11 @@ function render() {
 
     els.tableBody.innerHTML = pageItems.map(r => {
         const isExpanded = r.lgid === expandedLgid;
+        const districtText = (r.district || '').length > 120 ? (r.district || '').slice(0, 120) + '…' : (r.district || '');
         const mainRow = `<tr class="expandable ${isExpanded ? 'row-expanded' : ''}" data-lgid="${escapeHtml(r.lgid)}">
             <td><span class="expand-chevron">&#9656;</span></td>
-            <td class="mono">${escapeHtml(r.lgid_code || r.lgid)}</td>
             <td>${escapeHtml(r.province)}</td>
-            <td>${escapeHtml(r.district)}</td>
+            <td title="${escapeHtml(r.district || '')}">${escapeHtml(districtText)}</td>
             <td>${escapeHtml(r.lg_name)}</td>
             <td><a class="site-link" href="${escapeHtml(r.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(r.domain)}</a></td>
             <td>${statusBadge(r.status)}</td>
@@ -552,11 +688,101 @@ document.addEventListener('click', (e) => {
     }
 });
 
-function onFilterChange() { currentPage = 1; expandedLgid = null; refreshFilterOptions(); render(); }
+const filterConfig = [
+    { name: 'province', values: () => uniqueSorted(ALL_RECORDS.map(r => r.province)), selected: () => selectedProvinces },
+    { name: 'district', values: () => uniqueSorted((selectedProvinces.length ? ALL_RECORDS.filter(r => selectedProvinces.includes(r.province)) : ALL_RECORDS).map(r => r.district)), selected: () => selectedDistricts },
+    { name: 'lg', values: () => uniqueSorted((selectedProvinces.length ? ALL_RECORDS.filter(r => selectedProvinces.includes(r.province)) : ALL_RECORDS).filter(r => selectedDistricts.length ? selectedDistricts.includes(r.district) : true).map(r => r.lg_name)), selected: () => selectedLgs },
+];
 
-els.province.addEventListener('change', onFilterChange);
-els.district.addEventListener('change', onFilterChange);
-els.lg.addEventListener('change', () => { currentPage = 1; expandedLgid = null; render(); });
+function closeAllFilterPanels(exceptName = null) {
+    const panels = ['province', 'district', 'lg'];
+    panels.forEach(name => {
+        if (name === exceptName) return;
+        const panel = els[`${name}Panel`];
+        if (panel) panel.classList.remove('open');
+        const trigger = els[name];
+        if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    });
+}
+
+function toggleFilterPanel(name) {
+    const panel = els[`${name}Panel`];
+    const trigger = els[name];
+    const isOpen = panel.classList.contains('open');
+    closeAllFilterPanels(name);
+    panel.classList.toggle('open', !isOpen);
+    trigger.setAttribute('aria-expanded', String(!isOpen));
+    if (!isOpen) {
+        els[`${name}Search`].focus();
+    }
+}
+
+function bindMultiSelect(name) {
+    const trigger = els[name];
+    const panel = els[`${name}Panel`];
+    const searchInput = els[`${name}Search`];
+    const clearButton = els[`${name}Clear`];
+    const selectAllButton = els[`${name}SelectAll`];
+    const cfg = filterConfig.find(item => item.name === name);
+
+    trigger.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleFilterPanel(name);
+    });
+
+    searchInput.addEventListener('input', () => {
+        const values = cfg.values();
+        const selected = cfg.selected();
+        renderMultiSelectOptions(name, values, selected);
+    });
+
+    selectAllButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const values = cfg.values();
+        const selected = cfg.selected();
+        const query = (searchInput.value || '').trim().toLowerCase();
+        const visible = query ? values.filter(value => value.toLowerCase().includes(query)) : values;
+        const allVisibleSelected = visible.length > 0 && visible.every(value => selected.includes(value));
+
+        if (allVisibleSelected) {
+            selected.splice(0, selected.length, ...selected.filter(value => !visible.includes(value)));
+        } else {
+            visible.forEach(value => {
+                if (!selected.includes(value)) selected.push(value);
+            });
+        }
+        renderMultiSelectOptions(name, values, selected);
+        syncMultiSelectLabel(name, selected);
+        currentPage = 1;
+        refreshFilterOptions();
+        render();
+    });
+
+    clearButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const selected = cfg.selected();
+        selected.splice(0, selected.length);
+        searchInput.value = '';
+        const values = cfg.values();
+        renderMultiSelectOptions(name, values, selected);
+        syncMultiSelectLabel(name, selected);
+        currentPage = 1;
+        refreshFilterOptions();
+        render();
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!panel.contains(event.target) && !trigger.contains(event.target)) {
+            panel.classList.remove('open');
+            trigger.setAttribute('aria-expanded', 'false');
+        }
+    });
+}
+
+bindMultiSelect('province');
+bindMultiSelect('district');
+bindMultiSelect('lg');
+
 els.status.addEventListener('change', () => { currentPage = 1; expandedLgid = null; render(); });
 els.serverIp.addEventListener('change', () => { currentPage = 1; expandedLgid = null; render(); });
 els.sortBy.addEventListener('change', () => { currentPage = 1; render(); });
@@ -565,9 +791,12 @@ els.search.addEventListener('input', () => {
     searchDebounce = setTimeout(() => { currentPage = 1; expandedLgid = null; render(); }, 250);
 });
 els.reset.addEventListener('click', () => {
-    els.province.value = '';
-    els.district.value = '';
-    els.lg.value = '';
+    selectedProvinces = [];
+    selectedDistricts = [];
+    selectedLgs = [];
+    els.provinceSearch.value = '';
+    els.districtSearch.value = '';
+    els.lgSearch.value = '';
     els.status.value = '';
     els.serverIp.value = '';
     els.sortBy.value = 'lg_name';
@@ -591,13 +820,24 @@ buildServerSummary();
 // website_directory.php?province=...&server_ip=...
 (function applyUrlParams() {
     const params = new URLSearchParams(window.location.search);
-    if (params.has('province')) els.province.value = params.get('province');
-    refreshFilterOptions(); // district/LG options depend on province, so refresh before setting them
-    if (params.has('district')) els.district.value = params.get('district');
+
+    if (params.has('province')) {
+        selectedProvinces = [params.get('province')].filter(Boolean);
+    }
+    if (params.has('district')) {
+        selectedDistricts = [params.get('district')].filter(Boolean);
+    }
+    if (params.has('lg')) {
+        selectedLgs = [params.get('lg')].filter(Boolean);
+    }
+    if (params.has('status')) {
+        els.status.value = params.get('status');
+    }
+    if (params.has('server_ip')) {
+        els.serverIp.value = params.get('server_ip');
+    }
+
     refreshFilterOptions();
-    if (params.has('lg')) els.lg.value = params.get('lg');
-    if (params.has('status')) els.status.value = params.get('status');
-    if (params.has('server_ip')) els.serverIp.value = params.get('server_ip');
 })();
 
 render();
