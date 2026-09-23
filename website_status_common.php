@@ -146,7 +146,7 @@ function build_website_status_record($lg, $curlInfo, $curlErr, $headersRaw)
         'legacy_exists'     => null,
         'legacy_http_code'  => null,
         'legacy_url'        => null,
-        'checked_at'        => date('Y-m-d H:i:s'),
+        'checked_at'    => date('Y-m-d H:i:s'),
     ];
 }
 
@@ -228,4 +228,57 @@ function probe_one_lg_sync($lg, $timeout = 20, $connectTimeout = 10, $checkLegac
     }
 
     return $entry;
+}
+
+/**
+ * Simple file-based rate limiter (sliding window). Used to stop
+ * check_single_site.php - which is deliberately not behind the
+ * admin login, since it's meant for one-off single-site checks -
+ * from being scripted into an unthrottled mass-refresh that
+ * bypasses the whole point of gating the bulk fetch behind admin
+ * auth. Fails OPEN (allows the request) if the lock file can't be
+ * opened, so a filesystem hiccup never breaks the feature outright.
+ */
+function rate_limit_ok($key, $maxRequests = 20, $windowSeconds = 60)
+{
+    $storeFile = __DIR__ . '/.rate_limit.json';
+    $fp = @fopen($storeFile, 'c+');
+    if (!$fp) {
+        return true;
+    }
+
+    flock($fp, LOCK_EX);
+    $raw = stream_get_contents($fp);
+    $data = json_decode($raw, true);
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    $now = time();
+    $timestamps = $data[$key] ?? [];
+    $timestamps = array_values(array_filter($timestamps, function ($t) use ($now, $windowSeconds) {
+        return $t > $now - $windowSeconds;
+    }));
+
+    $allowed = count($timestamps) < $maxRequests;
+    if ($allowed) {
+        $timestamps[] = $now;
+    }
+    $data[$key] = $timestamps;
+
+    // Keep the file from growing forever - drop keys with no recent activity.
+    foreach ($data as $k => $v) {
+        if (empty($v)) {
+            unset($data[$k]);
+        }
+    }
+
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, json_encode($data));
+    fflush($fp);
+    flock($fp, LOCK_UN);
+    fclose($fp);
+
+    return $allowed;
 }

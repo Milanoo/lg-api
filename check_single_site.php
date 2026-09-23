@@ -26,6 +26,13 @@ if ($lgid === '') {
     exit;
 }
 
+$clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+if (!rate_limit_ok($clientIp, 20, 60)) {
+    http_response_code(429);
+    echo json_encode(['error' => 'Too many checks from this address - please wait a moment and try again.']);
+    exit;
+}
+
 $lgList = load_lg_list();
 $lg = null;
 foreach ($lgList as $row) {
